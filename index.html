@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gallery Deep‑Link Demo</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; }
+    #controls { margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
+    #itemName { flex: 1; padding: 6px; }
+    button { padding: 6px 12px; }
+    #gallery .item { 
+      border: 1px solid #ddd; padding: 10px; margin-bottom: 8px; 
+      border-radius: 4px; display: flex; justify-content: space-between; 
+      align-items: center; transition: background 0.3s;
+    }
+    #gallery .item:hover { background: #f9f9f9; }
+    a { text-decoration: none; font-size: 1.1em; }
+    #deepLink { width: 100%; padding: 6px; margin-bottom: 10px; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Gallery Deep‑Link Demo</h1>
+  <div id="controls">
+    <button id="viewAll" style="display:none;">← View All Items</button>
+    <input id="itemName" placeholder="Add new item..." />
+    <button id="addItem">Add</button>
+  </div>
+  <input id="deepLink" readonly style="display:none;" />
+  <div id="gallery">Loading…</div>
+
+  <script>
+    // compute a stable base URL for shareable links
+    const baseUrl = window.baseUrl || (window.location.origin + window.location.pathname);
+
+    // initialize Websim database connection
+    const room = new WebsimSocket();
+
+    // parse deep‑link params
+    const params = new URLSearchParams(window.location.search);
+    const recordTypeParam = params.get('recordType');
+    const recordIdParam   = params.get('recordId');
+
+    // pick the right collection (with optional filter)
+    const collection = (recordTypeParam && recordIdParam)
+      ? room.collection(recordTypeParam).filter({ id: recordIdParam })
+      : room.collection('galleryItem');
+
+    // show "view all" button if in deep‑link mode
+    const viewAllBtn = document.getElementById('viewAll');
+    if (recordTypeParam && recordIdParam) {
+      viewAllBtn.style.display = 'inline-block';
+      viewAllBtn.addEventListener('click', () => {
+        window.location.href = baseUrl;
+      });
+    }
+
+    const galleryEl     = document.getElementById('gallery');
+    const deepLinkInput = document.getElementById('deepLink');
+    const addBtn        = document.getElementById('addItem');
+    const nameInput     = document.getElementById('itemName');
+
+    function renderItems(items) {
+      if (!items.length) {
+        galleryEl.innerHTML = '<p>No items found.</p>';
+      } else {
+        galleryEl.innerHTML = '';
+        // if deep‑link view, show an input to copy the exact URL
+        if (recordTypeParam && recordIdParam) {
+          deepLinkInput.value = baseUrl + '?recordType=' + recordTypeParam + '&recordId=' + recordIdParam;
+          deepLinkInput.style.display = 'block';
+        } else {
+          deepLinkInput.style.display = 'none';
+        }
+        // render each item
+        items.slice().reverse().forEach(item => {
+          const row = document.createElement('div');
+          row.className = 'item';
+          const label = document.createElement('span');
+          label.textContent = item.name;
+          row.append(label);
+
+          // if not in deep‑link mode, attach a per‑item deep link
+          if (!recordTypeParam) {
+            const link = document.createElement('a');
+            link.textContent = '🔗';
+            link.title = 'Share this view';
+            link.href  = baseUrl + '?recordType=galleryItem&recordId=' + item.id;
+            row.append(link);
+          }
+
+          galleryEl.append(row);
+        });
+      }
+    }
+
+    // subscribe to live updates
+    const unsubscribe = collection.subscribe(renderItems);
+
+    // handle new item creation
+    addBtn.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) return;
+      await room.collection('galleryItem').create({ name });
+      nameInput.value = '';
+    });
+
+    // clean up on unload
+    window.addEventListener('beforeunload', () => unsubscribe());
+  </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
