@@ -7,7 +7,8 @@
   <style>
     body { font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; }
     #controls { margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
-    #itemName { flex: 1; padding: 6px; }
+    #itemName { flex: 2; padding: 6px; }
+    #itemCategory { flex: 1; padding: 6px; }
     button { padding: 6px 12px; }
     #gallery .item { 
       border: 1px solid #ddd; padding: 10px; margin-bottom: 8px; 
@@ -17,6 +18,13 @@
     #gallery .item:hover { background: #f9f9f9; }
     a { text-decoration: none; font-size: 1.1em; }
     #deepLink { width: 100%; padding: 6px; margin-bottom: 10px; font-family: monospace; }
+    /* New filter controls styling */
+    #filterControls { margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+    #filterControls input, #filterControls select { padding: 6px; }
+    .item.detail-view { background: #f0f4ff; flex-direction: column; align-items: flex-start; }
+    .item.detail-view h2 { margin: 0 0 8px; }
+    /* Adjust form inputs */
+    #controls input { margin-right: 8px; }
   </style>
 </head>
 <body>
@@ -24,85 +32,154 @@
   <div id="controls">
     <button id="viewAll" style="display:none;">← View All Items</button>
     <input id="itemName" placeholder="Add new item..." />
+    <input id="itemCategory" placeholder="Category" />
     <button id="addItem">Add</button>
   </div>
+
+  <!-- Filter controls for deep‑linkable filtering -->
+  <div id="filterControls" style="display:none;">
+    <label for="filterField">Filter by:</label>
+    <select id="filterField">
+      <option value="category">Category</option>
+      <option value="name">Name</option>
+    </select>
+    <input id="filterValue" placeholder="Value" />
+    <button id="applyFilter">Apply Filter</button>
+    <button id="copyFilterLink">Copy Link</button>
+  </div>
+
   <input id="deepLink" readonly style="display:none;" />
   <div id="gallery">Loading…</div>
 
   <script>
-    // compute a stable base URL for shareable links
+    // compute a stable base URL
     const baseUrl = window.baseUrl || (window.location.origin + window.location.pathname);
 
-    // initialize Websim database connection
+    // init Websim DB
     const room = new WebsimSocket();
 
     // parse deep‑link params
     const params = new URLSearchParams(window.location.search);
-    const recordTypeParam = params.get('recordType');
-    const recordIdParam   = params.get('recordId');
+    const recordTypeParam  = params.get('recordType');
+    const recordIdParam    = params.get('recordId');
+    const filterFieldParam = params.get('filterField');
+    const filterValueParam = params.get('filterValue');
 
-    // pick the right collection (with optional filter)
-    const collection = (recordTypeParam && recordIdParam)
-      ? room.collection(recordTypeParam).filter({ id: recordIdParam })
-      : room.collection('galleryItem');
-
-    // show "view all" button if in deep‑link mode
-    const viewAllBtn = document.getElementById('viewAll');
+    // pick collection or filtered view
+    let collection;
     if (recordTypeParam && recordIdParam) {
-      viewAllBtn.style.display = 'inline-block';
-      viewAllBtn.addEventListener('click', () => {
-        window.location.href = baseUrl;
-      });
+      collection = room.collection(recordTypeParam).filter({ id: recordIdParam });
+    } else if (filterFieldParam && filterValueParam) {
+      collection = room.collection('galleryItem').filter({ [filterFieldParam]: filterValueParam });
+    } else {
+      collection = room.collection('galleryItem');
     }
 
+    // show "view all" when deep‑linked or filtered
+    const viewAllBtn = document.getElementById('viewAll');
+    if (recordTypeParam || filterFieldParam) {
+      viewAllBtn.style.display = 'inline-block';
+      viewAllBtn.addEventListener('click', () => location.href = baseUrl);
+    }
+
+    // show filter panel for list views
+    const filterControls = document.getElementById('filterControls');
+    if (!(recordTypeParam && recordIdParam)) filterControls.style.display = 'flex';
+
+    // prefill filter inputs
+    const fieldInput = document.getElementById('filterField');
+    const valueInput = document.getElementById('filterValue');
+    if (filterFieldParam) fieldInput.value = filterFieldParam;
+    if (filterValueParam) valueInput.value = filterValueParam;
+
+    // filter actions
+    document.getElementById('applyFilter').addEventListener('click', () => {
+      const f = fieldInput.value, v = valueInput.value.trim();
+      if (v) location.href = baseUrl + `?filterField=${encodeURIComponent(f)}&filterValue=${encodeURIComponent(v)}`;
+    });
+    document.getElementById('copyFilterLink').addEventListener('click', () => {
+      const link = baseUrl + `?filterField=${encodeURIComponent(fieldInput.value)}&filterValue=${encodeURIComponent(valueInput.value.trim())}`;
+      navigator.clipboard.writeText(link).then(() => alert('Filter link copied!'));
+    });
+
+    // inputs & gallery
     const galleryEl     = document.getElementById('gallery');
     const deepLinkInput = document.getElementById('deepLink');
     const addBtn        = document.getElementById('addItem');
     const nameInput     = document.getElementById('itemName');
+    const categoryInput = document.getElementById('itemCategory');
+
+    // demo seeding
+    let demoLoaded = false;
+
+    function buildDeepLinkURL() {
+      const qp = new URLSearchParams();
+      if (recordTypeParam) qp.set('recordType', recordTypeParam);
+      if (recordIdParam)   qp.set('recordId',   recordIdParam);
+      if (filterFieldParam) qp.set('filterField', filterFieldParam);
+      if (filterValueParam) qp.set('filterValue', filterValueParam);
+      return baseUrl + '?' + qp.toString();
+    }
 
     function renderItems(items) {
+      // seed initial demo items if empty
+      if (!demoLoaded && !recordTypeParam && !filterFieldParam && items.length === 0) {
+        demoLoaded = true;
+        ['Sunset|Nature','Mountain|Nature','Portrait|People','Abstract|Digital'].forEach(async str => {
+          const [n, c] = str.split('|');
+          await room.collection('galleryItem').create({ name: n, category: c });
+        });
+        return;
+      }
+
       if (!items.length) {
         galleryEl.innerHTML = '<p>No items found.</p>';
       } else {
         galleryEl.innerHTML = '';
-        // if deep‑link view, show an input to copy the exact URL
-        if (recordTypeParam && recordIdParam) {
-          deepLinkInput.value = baseUrl + '?recordType=' + recordTypeParam + '&recordId=' + recordIdParam;
+        // deep‑link share box
+        if (recordTypeParam || filterFieldParam) {
+          deepLinkInput.value = buildDeepLinkURL();
           deepLinkInput.style.display = 'block';
         } else {
           deepLinkInput.style.display = 'none';
         }
-        // render each item
+        // render cards
         items.slice().reverse().forEach(item => {
           const row = document.createElement('div');
           row.className = 'item';
-          const label = document.createElement('span');
-          label.textContent = item.name;
-          row.append(label);
-
-          // if not in deep‑link mode, attach a per‑item deep link
-          if (!recordTypeParam) {
+          if (recordTypeParam && recordIdParam) {
+            row.classList.add('detail-view');
+            row.innerHTML = `
+              <h2>${item.name}</h2>
+              <p><strong>ID:</strong> ${item.id}</p>
+              <p><strong>Category:</strong> ${item.category || 'N/A'}</p>
+              <p><strong>Created:</strong> ${new Date(item.created_at).toLocaleString()}</p>
+            `;
+          } else {
+            const label = document.createElement('span');
+            label.textContent = item.name + (item.category ? ' ['+item.category+']' : '');
+            row.append(label);
             const link = document.createElement('a');
             link.textContent = '🔗';
-            link.title = 'Share this view';
-            link.href  = baseUrl + '?recordType=galleryItem&recordId=' + item.id;
+            link.title = 'Share this item';
+            link.href  = baseUrl + `?recordType=galleryItem&recordId=${item.id}`;
             row.append(link);
           }
-
           galleryEl.append(row);
         });
       }
     }
 
-    // subscribe to live updates
+    // live updates
     const unsubscribe = collection.subscribe(renderItems);
 
-    // handle new item creation
+    // add new item with category
     addBtn.addEventListener('click', async () => {
-      const name = nameInput.value.trim();
+      const name = nameInput.value.trim(), cat = categoryInput.value.trim();
       if (!name) return;
-      await room.collection('galleryItem').create({ name });
+      await room.collection('galleryItem').create({ name, category: cat || 'Uncategorized' });
       nameInput.value = '';
+      categoryInput.value = '';
     });
 
     // clean up on unload
@@ -111,4 +188,3 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
